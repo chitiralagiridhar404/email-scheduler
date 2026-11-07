@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Email Scheduler</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#171a21; --line:#262b36; --text:#e7e9ee; --muted:#8b93a3;
+    --accent:#5b8cff; --ok:#3ecf8e; --warn:#f5a524; --bad:#f31260; --info:#9b7bff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f7f9; --panel:#fff; --line:#e3e6ec; --text:#1a1d24; --muted:#6b7280; }
+  }
+  * { box-sizing:border-box }
+  body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text) }
+  header { padding:20px 24px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; align-items:center }
+  h1 { font-size:18px; margin:0 }
+  main { max-width:1200px; margin:0 auto; padding:24px; display:grid; gap:24px; grid-template-columns:340px 1fr }
+  @media (max-width:900px){ main{grid-template-columns:1fr} }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:16px }
+  .card h2 { font-size:14px; margin:0 0 12px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em }
+  label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px }
+  input, textarea { width:100%; background:var(--bg); color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; font:inherit }
+  textarea { min-height:90px; resize:vertical }
+  input:focus, textarea:focus { outline:2px solid var(--accent); outline-offset:-1px }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:8px 14px; font:inherit; cursor:pointer }
+  button.ghost { background:transparent; color:var(--muted); border:1px solid var(--line); padding:4px 10px; font-size:12px }
+  button.ghost:hover { color:var(--text) }
+  button:disabled { opacity:.6; cursor:default }
+  .row { display:flex; gap:8px; align-items:center }
+  .quick { display:flex; gap:6px; margin-top:6px; flex-wrap:wrap }
+  .stats { display:grid; grid-template-columns:repeat(5,1fr); gap:10px; margin-bottom:16px }
+  @media (max-width:600px){ .stats{grid-template-columns:repeat(2,1fr)} }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; cursor:pointer }
+  .stat.active { outline:2px solid var(--accent) }
+  .stat b { display:block; font-size:22px }
+  .stat span { color:var(--muted); font-size:12px }
+  table { width:100%; border-collapse:collapse }
+  th, td { text-align:left; padding:9px 8px; border-bottom:1px solid var(--line); vertical-align:top }
+  th { color:var(--muted); font-weight:500; font-size:12px }
+  td.subj { max-width:240px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .badge { padding:2px 8px; border-radius:99px; font-size:12px; border:1px solid currentColor; white-space:nowrap }
+  .scheduled{color:var(--info)} .queued{color:var(--warn)} .sending{color:var(--accent)} .sent{color:var(--ok)} .failed{color:var(--bad)}
+  .muted { color:var(--muted) } a { color:var(--accent) }
+  #msg { margin-top:10px; font-size:13px; min-height:18px }
+  .empty { text-align:center; color:var(--muted); padding:28px 0 }
+</style>
+</head>
+<body>
+<header>
+  <h1>📬 Email Scheduler</h1>
+  <span class="muted" id="live">connecting…</span>
+</header>
+<main>
+  <section class="card">
+    <h2>Schedule an email</h2>
+    <form id="form">
+      <label for="to">To</label>
+      <input id="to" type="email" required placeholder="lead@example.com" />
+      <label for="subject">Subject</label>
+      <input id="subject" required placeholder="Quick question" />
+      <label for="body">Body</label>
+      <textarea id="body" required placeholder="Hi there…"></textarea>
+      <label for="sendAt">Send at (your local time)</label>
+      <input id="sendAt" type="datetime-local" required />
+      <div class="quick">
+        <button type="button" class="ghost" data-min="0">Now</button>
+        <button type="button" class="ghost" data-min="1">+1 min</button>
+        <button type="button" class="ghost" data-min="5">+5 min</button>
+        <button type="button" class="ghost" data-min="60">+1 hour</button>
+      </div>
+      <div class="row" style="margin-top:14px"><button id="submit">Schedule</button></div>
+      <div id="msg"></div>
+    </form>
+  </section>
+
+  <section>
+    <div class="stats" id="stats"></div>
+    <div class="card">
+      <h2>Emails <span id="filterLabel" class="muted"></span></h2>
+      <table>
+        <thead><tr><th>Status</th><th>To</th><th>Subject</th><th>Send at</th><th>Info</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="empty" id="empty" hidden>No emails yet. Schedule one on the left.</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const STATUSES = ["scheduled","queued","sending","sent","failed"];
+let filter = null;
+const $ = (id) => document.getElementById(id);
+
+const pad = (n) => String(n).padStart(2, "0");
+function toLocalInput(d) {
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+function setIn(min) { $("sendAt").value = toLocalInput(new Date(Date.now() + min * 60000)); }
+setIn(1);
+document.querySelectorAll(".quick button").forEach(b => b.onclick = () => setIn(+b.dataset.min));
+
+const esc = (s) => String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fmt = (iso) => iso ? new Date(iso).toLocaleString() : "—";
+
+async function readJson(res) {
+  const type = res.headers.get("content-type") || "";
+  if (!type.includes("application/json")) {
+    const text = await res.text();
+    throw new Error(text ? `${res.status} ${res.statusText}: ${text.slice(0, 160)}` : `${res.status} ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data;
+}
+
+$("form").onsubmit = async (e) => {
+  e.preventDefault();
+  $("submit").disabled = true;
+  $("msg").textContent = "";
+  try {
+    const res = await fetch("/api/emails", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({
+        to: $("to").value, subject: $("subject").value, body: $("body").value,
+        sendAt: new Date($("sendAt").value).toISOString(),
+      }),
+    });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(JSON.stringify(data.details?.fieldErrors ?? data.error ?? data));
+    $("msg").style.color = "var(--ok)";
+    $("msg").textContent = `Scheduled (job ${data.id})`;
+    $("subject").value = ""; $("body").value = ""; setIn(1);
+    refresh();
+  } catch (err) {
+    $("msg").style.color = "var(--bad)";
+    $("msg").textContent = err.message;
+  } finally { $("submit").disabled = false; }
+};
+
+async function act(id, action) {
+  const res = action === "cancel"
+    ? await fetch(`/api/emails/${id}`, { method: "DELETE" })
+    : await fetch(`/api/emails/${id}/retry`, { method: "POST" });
+  if (!res.ok) {
+    const data = await readJson(res).catch(() => ({}));
+    throw new Error(JSON.stringify(data.error ?? data));
+  }
+  refresh();
+}
+window.act = act;
+
+async function refresh() {
+  try {
+    const [statsRes, rowsRes] = await Promise.all([
+      fetch("/api/stats"),
+      fetch("/api/emails" + (filter ? `?status=${filter}` : "")),
+    ]);
+    const stats = await readJson(statsRes);
+    const rows = await readJson(rowsRes);
+    $("stats").innerHTML = STATUSES.map(s =>
+      `<div class="stat ${filter===s?"active":""}" onclick="setFilter('${s}')"><b class="${s}">${stats[s]}</b><span>${s}</span></div>`
+    ).join("");
+    $("filterLabel").textContent = filter ? `· ${filter} (click again to clear)` : "";
+    $("empty").hidden = rows.length > 0;
+    $("rows").innerHTML = rows.map(r => `
+      <tr>
+        <td><span class="badge ${r.status}">${r.status}</span></td>
+        <td>${esc(r.to)}</td>
+        <td class="subj" title="${esc(r.subject)}">${esc(r.subject)}</td>
+        <td>${fmt(r.sendAt)}</td>
+        <td class="muted">${
+          r.previewUrl ? `<a href="${esc(r.previewUrl)}" target="_blank" rel="noopener">preview</a>` :
+          r.error ? esc(r.error) : (r.attempts ? `attempts: ${r.attempts}` : "")}</td>
+        <td>${
+          r.status==="scheduled"||r.status==="queued" ? `<button class="ghost" onclick="act('${r.id}','cancel')">Cancel</button>` :
+          r.status==="failed" ? `<button class="ghost" onclick="act('${r.id}','retry')">Retry</button>` : ""}</td>
+      </tr>`).join("");
+    $("live").textContent = "live · updated " + new Date().toLocaleTimeString();
+  } catch { $("live").textContent = "disconnected"; }
+}
+window.setFilter = (s) => { filter = filter === s ? null : s; refresh(); };
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
