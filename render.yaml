@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: email-scheduler
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: email-scheduler-redis
+          property: connectionString
+
+  - type: redis
+    name: email-scheduler-redis
+    plan: free
+    ipAllowList: []
